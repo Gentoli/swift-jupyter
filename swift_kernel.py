@@ -282,7 +282,7 @@ class SwiftKernel(Kernel):
         self.expr_opts.SetUnwindOnError(False)
         self.expr_opts.SetGenerateDebugInfo(True)
 
-        # Sets an infinite timeout so that users can run aribtrarily long
+        # Sets an infinite timeout so that users can run arbitrarily long
         # computations.
         self.expr_opts.SetTimeoutInMicroSeconds(0)
 
@@ -420,6 +420,7 @@ class SwiftKernel(Kernel):
         all_packages = []
         all_swiftpm_flags = []
         extra_include_commands = []
+        swift_version = None
         user_install_location = None
         for index, line in enumerate(code.split('\n')):
             line = self._process_system_command_line(line)
@@ -432,11 +433,21 @@ class SwiftKernel(Kernel):
                 self._process_extra_include_command_line(line)
             if extra_include_command:
                 extra_include_commands.append(extra_include_command)
+            line, version = self._process_install_swift_version_line(
+                line)
+            if version:
+                if not swift_version:
+                    swift_version = version
+                else:
+                    raise PackageInstallException(
+                    'Line %d: %%multiple swift version specified' % (
+                            index + 1))
+                
             processed_lines.append(line)
             all_packages += packages
             if install_location: user_install_location = install_location
 
-        self._install_packages(all_packages, all_swiftpm_flags,
+        self._install_packages(swift_version, all_packages, all_swiftpm_flags,
                                extra_include_commands,
                                user_install_location)
         return '\n'.join(processed_lines)
@@ -477,6 +488,14 @@ class SwiftKernel(Kernel):
             return line, []
         flags = shlex.split(install_swiftpm_flags_match.group(1))
         return '', flags
+
+    def _process_install_swift_version_line(self, line):
+        install_swift_version_match = re.match(
+                r'^\s*%install-swift-version (.*)$', line)
+        if install_swift_version_match is None:
+            return line, None
+        version = install_swift_version_match.group(1)
+        return '', version
 
     def _process_install_line(self, line_index, line):
         install_match = re.match(r'^\s*%install (.*)$', line)
@@ -539,7 +558,7 @@ class SwiftKernel(Kernel):
                         'Failed to stat scratchwork base path: %s' % str(e))
             os.symlink(target, link_name)
 
-    def _install_packages(self, packages, swiftpm_flags, extra_include_commands,
+    def _install_packages(self, swift_version, packages, swiftpm_flags, extra_include_commands,
                           user_install_location):
         if len(packages) == 0 and len(swiftpm_flags) == 0:
             return
@@ -627,7 +646,7 @@ class SwiftKernel(Kernel):
         # == Create the SwiftPM package ==
 
         package_swift_template = textwrap.dedent("""\
-            // swift-tools-version:4.2
+            // swift-tools-version:%s
             import PackageDescription
             let package = Package(
                 name: "jupyterInstalledPackages",
@@ -647,6 +666,9 @@ class SwiftKernel(Kernel):
                 ])
         """)
 
+        if not swift_version:
+            swift_version = '4.2'
+
         packages_specs = ''
         packages_products = ''
         packages_human_description = ''
@@ -654,9 +676,13 @@ class SwiftKernel(Kernel):
             packages_specs += '%s,\n' % package['spec']
             packages_human_description += '\t%s\n' % package['spec']
             for target in package['products']:
-                packages_products += '%s,\n' % json.dumps(target)
+                packages_products += '%s,\n' % target
                 packages_human_description += '\t\t%s\n' % target
 
+        self.send_response(self.iopub_socket, 'stream', {
+            'name': 'stdout',
+            'text': 'Using Swift Tools versions: %s\n' % swift_version
+        })
         self.send_response(self.iopub_socket, 'stream', {
             'name': 'stdout',
             'text': 'Installing packages:\n%s' % packages_human_description
@@ -670,7 +696,8 @@ class SwiftKernel(Kernel):
             'text': 'Working in: %s\n' % scratchwork_base_path
         })
 
-        package_swift = package_swift_template % (packages_specs,
+        package_swift = package_swift_template % (swift_version,
+                                                  packages_specs,
                                                   packages_products)
 
         with open('%s/Package.swift' % package_base_path, 'w') as f:
@@ -769,8 +796,8 @@ class SwiftKernel(Kernel):
             # Create a separate directory for each modulemap file because the
             # ClangImporter requires that they are all named
             # "module.modulemap".
-            # Use the module name to prevent two modulema[s for the same
-            # depndency ending up in multiple directories after several
+            # Use the module name to prevent two modulemaps for the same
+            # dependency ending up in multiple directories after several
             # installations, causing the kernel to end up in a bad state.
             # Make all relative header paths in module.modulemap absolute
             # because we copy file to different location.
