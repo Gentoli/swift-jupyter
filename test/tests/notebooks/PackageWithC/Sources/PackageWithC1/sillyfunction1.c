@@ -1,3 +1,6 @@
+
+#include "sillyfunction1.h"
+
 int sillyfunction1() {
-  return 42;
+  return LIB_ID;
 }

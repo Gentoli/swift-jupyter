@@ -10,8 +10,11 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(
-            name: "PackageWithC1",
+            name: "LibWithC",
             dependencies: []),
+        .target(
+            name: "PackageWithC1",
+            dependencies: ["LibWithC"]),
         .target(
             name: "PackageWithC2",
             dependencies: []),
